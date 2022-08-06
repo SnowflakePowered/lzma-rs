@@ -1,9 +1,8 @@
 use crate::decode::lzbuffer::{LzBuffer, LzCircularBuffer};
-use crate::decode::rangecoder;
-use crate::decode::rangecoder::RangeDecoder;
-use crate::decompress::Options;
-use crate::decompress::UnpackedSize;
+use crate::decode::rangecoder::{BitTree, LenDecoder, RangeDecoder};
+use crate::decompress::{Options, UnpackedSize};
 use crate::error;
+use crate::util::vec2d::Vec2D;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io;
 
@@ -167,9 +166,9 @@ pub(crate) struct DecoderState {
     partial_input_buf: std::io::Cursor<[u8; MAX_REQUIRED_INPUT]>,
     pub(crate) lzma_props: LzmaProperties,
     unpacked_size: Option<u64>,
-    literal_probs: Vec<Vec<u16>>,
-    pos_slot_decoder: Vec<rangecoder::BitTree>,
-    align_decoder: rangecoder::BitTree,
+    literal_probs: Vec2D<u16>,
+    pos_slot_decoder: [BitTree; 4],
+    align_decoder: BitTree,
     pos_decoders: [u16; 115],
     is_match: [u16; 192], // true = LZ, false = literal
     is_rep: [u16; 12],
@@ -179,8 +178,8 @@ pub(crate) struct DecoderState {
     is_rep_0long: [u16; 192],
     state: usize,
     rep: [usize; 4],
-    len_decoder: rangecoder::LenDecoder,
-    rep_len_decoder: rangecoder::LenDecoder,
+    len_decoder: LenDecoder,
+    rep_len_decoder: LenDecoder,
 }
 
 impl DecoderState {
@@ -190,9 +189,14 @@ impl DecoderState {
             partial_input_buf: std::io::Cursor::new([0; MAX_REQUIRED_INPUT]),
             lzma_props,
             unpacked_size,
-            literal_probs: vec![vec![0x400; 0x300]; 1 << (lzma_props.lc + lzma_props.lp)],
-            pos_slot_decoder: vec![rangecoder::BitTree::new(6); 4],
-            align_decoder: rangecoder::BitTree::new(4),
+            literal_probs: Vec2D::init(0x400, (1 << (lzma_props.lc + lzma_props.lp), 0x300)),
+            pos_slot_decoder: [
+                BitTree::new(6),
+                BitTree::new(6),
+                BitTree::new(6),
+                BitTree::new(6),
+            ],
+            align_decoder: BitTree::new(4),
             pos_decoders: [0x400; 115],
             is_match: [0x400; 192],
             is_rep: [0x400; 12],
@@ -202,8 +206,8 @@ impl DecoderState {
             is_rep_0long: [0x400; 192],
             state: 0,
             rep: [0; 4],
-            len_decoder: rangecoder::LenDecoder::new(),
-            rep_len_decoder: rangecoder::LenDecoder::new(),
+            len_decoder: LenDecoder::new(),
+            rep_len_decoder: LenDecoder::new(),
         }
     }
 
@@ -211,24 +215,24 @@ impl DecoderState {
         new_props.validate();
         if self.lzma_props.lc + self.lzma_props.lp == new_props.lc + new_props.lp {
             // We can reset here by filling the existing buffer with 0x400.
-            self.literal_probs.iter_mut().for_each(|v| v.fill(0x400))
+            self.literal_probs.fill(0x400);
         } else {
             // We need to reallocate because of the new size of `lc+lp`.
-            self.literal_probs = vec![vec![0x400; 0x300]; 1 << (new_props.lc + new_props.lp)];
+            self.literal_probs = Vec2D::init(0x400, (1 << (new_props.lc + new_props.lp), 0x300));
         }
 
         self.lzma_props = new_props;
         self.pos_slot_decoder.iter_mut().for_each(|t| t.reset());
         self.align_decoder.reset();
-        self.pos_decoders.fill(0x400);
-        self.is_match.fill(0x400);
-        self.is_rep.fill(0x400);
-        self.is_rep_g0.fill(0x400);
-        self.is_rep_g1.fill(0x400);
-        self.is_rep_g2.fill(0x400);
-        self.is_rep_0long.fill(0x400);
+        self.pos_decoders = [0x400; 115];
+        self.is_match = [0x400; 192];
+        self.is_rep = [0x400; 12];
+        self.is_rep_g0 = [0x400; 12];
+        self.is_rep_g1 = [0x400; 12];
+        self.is_rep_g2 = [0x400; 12];
+        self.is_rep_0long = [0x400; 192];
         self.state = 0;
-        self.rep.fill(0);
+        self.rep = [0; 4];
         self.len_decoder.reset();
         self.rep_len_decoder.reset();
     }
@@ -240,7 +244,7 @@ impl DecoderState {
     pub fn process<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
-        rangecoder: &mut rangecoder::RangeDecoder<'a, R>,
+        rangecoder: &mut RangeDecoder<'a, R>,
     ) -> error::Result<()> {
         self.process_mode(output, rangecoder, ProcessingMode::Finish)
     }
@@ -249,7 +253,7 @@ impl DecoderState {
     pub fn process_stream<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
-        rangecoder: &mut rangecoder::RangeDecoder<'a, R>,
+        rangecoder: &mut RangeDecoder<'a, R>,
     ) -> error::Result<()> {
         self.process_mode(output, rangecoder, ProcessingMode::Partial)
     }
@@ -263,7 +267,7 @@ impl DecoderState {
     fn process_next_inner<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
-        rangecoder: &mut rangecoder::RangeDecoder<'a, R>,
+        rangecoder: &mut RangeDecoder<'a, R>,
         update: bool,
     ) -> error::Result<ProcessingStatus> {
         let pos_state = output.len() & ((1 << self.lzma_props.pb) - 1);
@@ -380,7 +384,7 @@ impl DecoderState {
     fn process_next<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
-        rangecoder: &mut rangecoder::RangeDecoder<'a, R>,
+        rangecoder: &mut RangeDecoder<'a, R>,
     ) -> error::Result<ProcessingStatus> {
         self.process_next_inner(output, rangecoder, true)
     }
@@ -398,7 +402,7 @@ impl DecoderState {
         code: u32,
     ) -> error::Result<()> {
         let mut temp = std::io::Cursor::new(buf);
-        let mut rangecoder = rangecoder::RangeDecoder::from_parts(&mut temp, range, code);
+        let mut rangecoder = RangeDecoder::from_parts(&mut temp, range, code);
         let _ = self.process_next_inner(output, &mut rangecoder, false)?;
         Ok(())
     }
@@ -406,7 +410,7 @@ impl DecoderState {
     /// Utility function to read data into the partial input buffer.
     fn read_partial_input_buf<'a, R: io::BufRead>(
         &mut self,
-        rangecoder: &mut rangecoder::RangeDecoder<'a, R>,
+        rangecoder: &mut RangeDecoder<'a, R>,
     ) -> error::Result<()> {
         // Fill as much of the tmp buffer as possible
         let start = self.partial_input_buf.position() as usize;
@@ -420,7 +424,7 @@ impl DecoderState {
     fn process_mode<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
-        rangecoder: &mut rangecoder::RangeDecoder<'a, R>,
+        rangecoder: &mut RangeDecoder<'a, R>,
         mode: ProcessingMode,
     ) -> error::Result<()> {
         loop {
@@ -461,11 +465,8 @@ impl DecoderState {
                 // Run the decompressor on the tmp buffer
                 let mut tmp_reader =
                     io::Cursor::new(&tmp[..self.partial_input_buf.position() as usize]);
-                let mut tmp_rangecoder = rangecoder::RangeDecoder::from_parts(
-                    &mut tmp_reader,
-                    rangecoder.range,
-                    rangecoder.code,
-                );
+                let mut tmp_rangecoder =
+                    RangeDecoder::from_parts(&mut tmp_reader, rangecoder.range, rangecoder.code);
                 let res = self.process_next(output, &mut tmp_rangecoder)?;
 
                 // Update the actual rangecoder
@@ -514,7 +515,7 @@ impl DecoderState {
     fn decode_literal<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
-        rangecoder: &mut rangecoder::RangeDecoder<'a, R>,
+        rangecoder: &mut RangeDecoder<'a, R>,
         update: bool,
     ) -> error::Result<u8> {
         let def_prev_byte = 0u8;
@@ -550,7 +551,7 @@ impl DecoderState {
 
     fn decode_distance<'a, R: io::BufRead>(
         &mut self,
-        rangecoder: &mut rangecoder::RangeDecoder<'a, R>,
+        rangecoder: &mut RangeDecoder<'a, R>,
         length: usize,
         update: bool,
     ) -> error::Result<usize> {
