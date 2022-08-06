@@ -246,7 +246,7 @@ impl DecoderState {
         self.unpacked_size = unpacked_size;
     }
 
-    pub fn process<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
+    pub fn process<'a, 'b, W: io::Write, LZB: LzBuffer<'b, W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
         rangecoder: &mut RangeDecoder<'a, R>,
@@ -255,7 +255,7 @@ impl DecoderState {
     }
 
     #[cfg(feature = "stream")]
-    pub fn process_stream<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
+    pub fn process_stream<'a, 'b, W: io::Write, LZB: LzBuffer<'b, W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
         rangecoder: &mut RangeDecoder<'a, R>,
@@ -269,7 +269,7 @@ impl DecoderState {
     ///
     /// Returns `ProcessingStatus` to determine whether one should continue
     /// processing the loop.
-    fn process_next_inner<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
+    fn process_next_inner<'a, 'b, W: io::Write, LZB: LzBuffer<'b, W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
         rangecoder: &mut RangeDecoder<'a, R>,
@@ -386,7 +386,7 @@ impl DecoderState {
         Ok(ProcessingStatus::Continue)
     }
 
-    fn process_next<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
+    fn process_next<'a, 'b, W: io::Write, LZB: LzBuffer<'b, W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
         rangecoder: &mut RangeDecoder<'a, R>,
@@ -399,7 +399,7 @@ impl DecoderState {
     /// This will check to see if there is enough data to consume and advance the
     /// decompressor. Needed in streaming mode to avoid corrupting the state while
     /// processing incomplete chunks of data.
-    fn try_process_next<W: io::Write, LZB: LzBuffer<W>>(
+    fn try_process_next<'a, W: io::Write, LZB: LzBuffer<'a, W>>(
         &mut self,
         output: &mut LZB,
         buf: &[u8],
@@ -426,7 +426,7 @@ impl DecoderState {
         Ok(())
     }
 
-    fn process_mode<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
+    fn process_mode<'a, 'b, W: io::Write, LZB: LzBuffer<'b, W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
         rangecoder: &mut RangeDecoder<'a, R>,
@@ -517,7 +517,7 @@ impl DecoderState {
         Ok(())
     }
 
-    fn decode_literal<'a, W: io::Write, LZB: LzBuffer<W>, R: io::BufRead>(
+    fn decode_literal<'a, 'b, W: io::Write, LZB: LzBuffer<'b, W>, R: io::BufRead>(
         &mut self,
         output: &mut LZB,
         rangecoder: &mut RangeDecoder<'a, R>,
@@ -592,16 +592,29 @@ pub struct LzmaDecoder {
     params: LzmaParams,
     memlimit: usize,
     state: DecoderState,
+    buf: Vec<u8>,
 }
 
 impl LzmaDecoder {
     /// Creates a new object ready for decompressing data that it's given for the input
     /// dict size, expected unpacked data size, and memory limit for the internal buffer.
     pub fn new(params: LzmaParams, memlimit: Option<usize>) -> error::Result<LzmaDecoder> {
+        Self::new_with_buffer(params, memlimit, Vec::new())
+    }
+
+    /// Creates a new object ready for decompressing data that it's given for the input
+    /// dict size, expected unpacked data size, memory limit for the internal buffer, and
+    /// a pre-allocated buffer to use as the internal buffer.
+    pub fn new_with_buffer(
+        params: LzmaParams,
+        memlimit: Option<usize>,
+        buf: Vec<u8>,
+    ) -> error::Result<LzmaDecoder> {
         Ok(Self {
             params,
             memlimit: memlimit.unwrap_or(usize::MAX),
             state: DecoderState::new(params.properties, params.unpacked_size),
+            buf,
         })
     }
 
@@ -614,6 +627,7 @@ impl LzmaDecoder {
     #[cfg(feature = "raw_decoder")]
     pub fn reset(&mut self, unpacked_size: Option<Option<u64>>) {
         self.state.reset_state(self.params.properties);
+        self.buf.clear();
 
         if let Some(unpacked_size) = unpacked_size {
             self.state.set_unpacked_size(unpacked_size);

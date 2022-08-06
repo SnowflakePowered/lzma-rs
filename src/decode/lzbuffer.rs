@@ -1,10 +1,13 @@
 use crate::error;
 use std::io;
 
-pub trait LzBuffer<W>
+pub trait LzBuffer<'a, W>
 where
     W: io::Write,
 {
+    // Create a new buffer from the stream.
+    fn from_stream(stream: W, dict_size: usize, memlimit: usize, buf: &'a mut Vec<u8>) -> Self;
+    // Retrieve the length of the buffer
     fn len(&self) -> usize;
     // Retrieve the last byte or return a default
     fn last_or(&self, lit: u8) -> u8;
@@ -18,44 +21,36 @@ where
     fn get_output(&self) -> &W;
     // Get a mutable reference to the output sink
     fn get_output_mut(&mut self) -> &mut W;
-    // Consumes this buffer and flushes any data
+    // Consumes this buffer and flushes any data, returning the output stream and the internal buffer.
     fn finish(self) -> io::Result<W>;
     // Consumes this buffer without flushing any data
     fn into_output(self) -> W;
 }
 
-// An accumulating buffer for LZ sequences
-pub struct LzAccumBuffer<W>
+/// An accumulating buffer for LZ sequences
+#[derive(Debug)]
+pub struct LzAccumBuffer<'a, W>
 where
     W: io::Write,
 {
-    stream: W,       // Output sink
-    buf: Vec<u8>,    // Buffer
-    memlimit: usize, // Buffer memory limit
-    len: usize,      // Total number of bytes sent through the buffer
+    stream: W,            // Output sink
+    buf: &'a mut Vec<u8>, // Buffer
+    memlimit: usize,      // Buffer memory limit
+    len: usize,           // Total number of bytes sent through the buffer
 }
 
-impl<W> LzAccumBuffer<W>
+impl<'a, W> LzAccumBuffer<'a, W>
 where
     W: io::Write,
 {
-    pub fn from_stream(stream: W, memlimit: usize) -> Self {
-        Self {
-            stream,
-            buf: Vec::new(),
-            memlimit,
-            len: 0,
-        }
-    }
-
     // Append bytes
-    pub fn append_bytes(&mut self, buf: &[u8]) {
+    pub(crate) fn append_bytes(&mut self, buf: &[u8]) {
         self.buf.extend_from_slice(buf);
         self.len += buf.len();
     }
 
     // Reset the internal dictionary
-    pub fn reset(&mut self) -> io::Result<()> {
+    pub(crate) fn reset(&mut self) -> io::Result<()> {
         self.stream.write_all(self.buf.as_slice())?;
         self.buf.clear();
         self.len = 0;
@@ -63,10 +58,19 @@ where
     }
 }
 
-impl<W> LzBuffer<W> for LzAccumBuffer<W>
+impl<'a, W> LzBuffer<'a, W> for LzAccumBuffer<'a, W>
 where
     W: io::Write,
 {
+    fn from_stream(stream: W, _dict_size: usize, memlimit: usize, buf: &'a mut Vec<u8>) -> Self {
+        Self {
+            stream,
+            buf,
+            memlimit,
+            len: 0,
+        }
+    }
+
     fn len(&self) -> usize {
         self.len
     }
@@ -154,35 +158,24 @@ where
     }
 }
 
-// A circular buffer for LZ sequences
-pub struct LzCircularBuffer<W>
+/// A circular buffer for LZ sequences
+#[derive(Debug)]
+pub struct LzCircularBuffer<'a, W>
 where
     W: io::Write,
 {
-    stream: W,        // Output sink
-    buf: Vec<u8>,     // Circular buffer
-    dict_size: usize, // Length of the buffer
-    memlimit: usize,  // Buffer memory limit
-    cursor: usize,    // Current position
-    len: usize,       // Total number of bytes sent through the buffer
+    stream: W,            // Output sink
+    buf: &'a mut Vec<u8>, // Circular buffer
+    dict_size: usize,     // Length of the buffer
+    memlimit: usize,      // Buffer memory limit
+    cursor: usize,        // Current position
+    len: usize,           // Total number of bytes sent through the buffer
 }
 
-impl<W> LzCircularBuffer<W>
+impl<'a, W> LzCircularBuffer<'a, W>
 where
     W: io::Write,
 {
-    pub fn from_stream(stream: W, dict_size: usize, memlimit: usize) -> Self {
-        lzma_info!("Dict size in LZ buffer: {}", dict_size);
-        Self {
-            stream,
-            buf: Vec::new(),
-            dict_size,
-            memlimit,
-            cursor: 0,
-            len: 0,
-        }
-    }
-
     fn get(&self, index: usize) -> u8 {
         *self.buf.get(index).unwrap_or(&0)
     }
@@ -205,10 +198,22 @@ where
     }
 }
 
-impl<W> LzBuffer<W> for LzCircularBuffer<W>
+impl<'a, W> LzBuffer<'a, W> for LzCircularBuffer<'a, W>
 where
     W: io::Write,
 {
+    fn from_stream(stream: W, dict_size: usize, memlimit: usize, buf: &'a mut Vec<u8>) -> Self {
+        lzma_info!("Dict size in LZ buffer: {}", dict_size);
+        Self {
+            stream,
+            buf,
+            dict_size,
+            memlimit,
+            cursor: 0,
+            len: 0,
+        }
+    }
+
     fn len(&self) -> usize {
         self.len
     }
