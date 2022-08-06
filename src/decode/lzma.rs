@@ -1,5 +1,5 @@
 use crate::decode::lzbuffer::{LzBuffer, LzCircularBuffer};
-use crate::decode::rangecoder::{BitTree, LenDecoder, RangeDecoder};
+use crate::decode::rangecoder::{bittree_probs_len, BitTree, LenDecoder, RangeDecoder};
 use crate::decompress::{Options, UnpackedSize};
 use crate::error;
 use crate::util::vec2d::Vec2D;
@@ -167,8 +167,8 @@ pub(crate) struct DecoderState {
     pub(crate) lzma_props: LzmaProperties,
     unpacked_size: Option<u64>,
     literal_probs: Vec2D<u16>,
-    pos_slot_decoder: [BitTree; 4],
-    align_decoder: BitTree,
+    pos_slot_decoder: [BitTree<6, { bittree_probs_len::<6>() }>; 4],
+    align_decoder: BitTree<4, { bittree_probs_len::<4>() }>,
     pos_decoders: [u16; 115],
     is_match: [u16; 192], // true = LZ, false = literal
     is_rep: [u16; 12],
@@ -191,12 +191,12 @@ impl DecoderState {
             unpacked_size,
             literal_probs: Vec2D::init(0x400, (1 << (lzma_props.lc + lzma_props.lp), 0x300)),
             pos_slot_decoder: [
-                BitTree::new(6),
-                BitTree::new(6),
-                BitTree::new(6),
-                BitTree::new(6),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
             ],
-            align_decoder: BitTree::new(4),
+            align_decoder: BitTree::new(),
             pos_decoders: [0x400; 115],
             is_match: [0x400; 192],
             is_rep: [0x400; 12],
@@ -222,8 +222,13 @@ impl DecoderState {
         }
 
         self.lzma_props = new_props;
-        self.pos_slot_decoder.iter_mut().for_each(|t| t.reset());
-        self.align_decoder.reset();
+        self.pos_slot_decoder = [
+            BitTree::new(),
+            BitTree::new(),
+            BitTree::new(),
+            BitTree::new(),
+        ];
+        self.align_decoder = BitTree::new();
         self.pos_decoders = [0x400; 115];
         self.is_match = [0x400; 192];
         self.is_rep = [0x400; 12];
@@ -233,8 +238,8 @@ impl DecoderState {
         self.is_rep_0long = [0x400; 192];
         self.state = 0;
         self.rep = [0; 4];
-        self.len_decoder.reset();
-        self.rep_len_decoder.reset();
+        self.len_decoder = LenDecoder::new();
+        self.rep_len_decoder = LenDecoder::new();
     }
 
     pub fn set_unpacked_size(&mut self, unpacked_size: Option<u64>) {

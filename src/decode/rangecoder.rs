@@ -150,18 +150,35 @@ where
     }
 }
 
-// TODO: parametrize by constant and use [u16; 1 << num_bits] as soon as Rust supports this
-#[derive(Debug, Clone)]
-pub struct BitTree {
-    num_bits: usize,
-    probs: Vec<u16>,
+/// macro for compile-time const assertions
+macro_rules! const_assert {
+    ($($list:ident : $ty:ty),* => $expr:expr) => {{
+        struct Assert<$(const $list: $ty,)*>;
+        impl<$(const $list: $ty,)*> Assert<$($list,)*> {
+            const OK: u8 = 0 - !($expr) as u8;
+        }
+        Assert::<$($list,)*>::OK
+    }};
+    ($expr:expr) => {
+        const OK: u8 = 0 - !($expr) as u8;
+    };
 }
 
-impl BitTree {
-    pub fn new(num_bits: usize) -> Self {
+// const fn helper to parameterize the length of the bittree probability array.
+pub const fn bittree_probs_len<const NUM_BITS: usize>() -> usize {
+    1 << NUM_BITS
+}
+
+#[derive(Debug, Clone)]
+pub struct BitTree<const NUM_BITS: usize, const PROBS_ARRAY_LEN: usize> {
+    probs: [u16; PROBS_ARRAY_LEN],
+}
+
+impl<const NUM_BITS: usize, const PROBS_ARRAY_LEN: usize> BitTree<NUM_BITS, PROBS_ARRAY_LEN> {
+    pub fn new() -> Self {
+        const_assert!(NUM_BITS: usize, PROBS_ARRAY_LEN: usize => PROBS_ARRAY_LEN == bittree_probs_len::<NUM_BITS>());
         BitTree {
-            num_bits,
-            probs: vec![0x400; 1 << num_bits],
+            probs: [0x400; PROBS_ARRAY_LEN],
         }
     }
 
@@ -170,7 +187,7 @@ impl BitTree {
         rangecoder: &mut RangeDecoder<R>,
         update: bool,
     ) -> io::Result<u32> {
-        rangecoder.parse_bit_tree(self.num_bits, self.probs.as_mut_slice(), update)
+        rangecoder.parse_bit_tree(NUM_BITS, &mut self.probs, update)
     }
 
     pub fn parse_reverse<R: io::BufRead>(
@@ -178,11 +195,7 @@ impl BitTree {
         rangecoder: &mut RangeDecoder<R>,
         update: bool,
     ) -> io::Result<u32> {
-        rangecoder.parse_reverse_bit_tree(self.num_bits, self.probs.as_mut_slice(), 0, update)
-    }
-
-    pub fn reset(&mut self) {
-        self.probs.fill(0x400);
+        rangecoder.parse_reverse_bit_tree(NUM_BITS, &mut self.probs, 0, update)
     }
 }
 
@@ -190,9 +203,9 @@ impl BitTree {
 pub struct LenDecoder {
     choice: u16,
     choice2: u16,
-    low_coder: [BitTree; 16],
-    mid_coder: [BitTree; 16],
-    high_coder: BitTree,
+    low_coder: [BitTree<3, { bittree_probs_len::<3>() }>; 16],
+    mid_coder: [BitTree<3, { bittree_probs_len::<3>() }>; 16],
+    high_coder: BitTree<8, { bittree_probs_len::<8>() }>,
 }
 
 impl LenDecoder {
@@ -201,42 +214,42 @@ impl LenDecoder {
             choice: 0x400,
             choice2: 0x400,
             low_coder: [
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
             ],
             mid_coder: [
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
-                BitTree::new(3),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
+                BitTree::new(),
             ],
-            high_coder: BitTree::new(8),
+            high_coder: BitTree::new(),
         }
     }
 
@@ -253,13 +266,5 @@ impl LenDecoder {
         } else {
             Ok(self.high_coder.parse(rangecoder, update)? as usize + 16)
         }
-    }
-
-    pub fn reset(&mut self) {
-        self.choice = 0x400;
-        self.choice2 = 0x400;
-        self.low_coder.iter_mut().for_each(|t| t.reset());
-        self.mid_coder.iter_mut().for_each(|t| t.reset());
-        self.high_coder.reset();
     }
 }
