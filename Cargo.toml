@@ -1,10 +1,10 @@
 [package]
-name = "lzma-rs"
-description = "A codec for LZMA, LZMA2 and XZ written in pure Rust"
-version = "0.2.0"
+name = "lzma-rs-perf-exp"
+description = "A codec for LZMA, LZMA2 and XZ written in pure Rust with performance experiments"
+version = "0.2.1"
 license = "MIT"
-authors = ["Guillaume Endignoux <ggendx@gmail.com>"]
-repository = "https://github.com/gendx/lzma-rs"
+authors = ["Guillaume Endignoux <ggendx@gmail.com>", "Ronny Chan <ronny@ronnychan.ca>"]
+repository = "https://github.com/SnowflakePowered/lzma-rs/tree/feature-perf-experiments"
 readme = "README.md"
 categories = ["compression"]
 keywords = ["lzma", "compression", "decompression"]

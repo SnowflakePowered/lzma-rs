@@ -1,4 +1,4 @@
-# lzma-rs
+# lzma-rs-perf-exp
 
 [![Crate](https://img.shields.io/crates/v/lzma-rs.svg)](https://crates.io/crates/lzma-rs)
 [![Documentation](https://docs.rs/lzma-rs/badge.svg)](https://docs.rs/lzma-rs)
@@ -8,6 +8,9 @@
 
 This project is a decoder for LZMA and its variants written in pure Rust, with focus on clarity.
 It already supports LZMA, LZMA2 and a subset of the `.xz` file format.
+
+This fork provides some (API-unstable) performance experiments for use in [chd-rs](https://github.com/SnowflakePowered/chd-rs), 
+which may gradually be upstreamed. The API is subject to change without a corresponding SemVer-compatible version bump.
 
 ## Usage
 
