@@ -30,6 +30,7 @@ pub mod decompress {
     #[cfg_attr(docsrs, doc(cfg(raw_decoder)))]
     pub mod raw {
         //! Raw decoding primitives for LZMA/LZMA2 streams.
+        pub use crate::decode::lzbuffer::{LzAccumBuffer, LzCircularBuffer};
         pub use crate::decode::lzma::{LzmaDecoder, LzmaParams, LzmaProperties};
         pub use crate::decode::lzma2::Lzma2Decoder;
     }

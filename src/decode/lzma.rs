@@ -640,8 +640,28 @@ impl LzmaDecoder {
         input: &mut R,
         output: &mut W,
     ) -> error::Result<()> {
-        let mut output =
-            LzCircularBuffer::from_stream(output, self.params.dict_size as usize, self.memlimit);
+        self.decompress_with_buffer::<LzCircularBuffer<'_, &mut W>, _, _>(input, output)
+    }
+
+    /// Decompresses the input data into the output, consuming only as much input as needed and writing as much output as possible,
+    /// using the provided buffer type as an intermediary buffer for LZ sequence decoding.
+    pub fn decompress_with_buffer<
+        'a,
+        'b,
+        B: LzBuffer<'b, &'a mut W>,
+        W: io::Write,
+        R: io::BufRead,
+    >(
+        &'b mut self,
+        input: &mut R,
+        output: &'a mut W,
+    ) -> error::Result<()> {
+        let mut output = B::from_stream(
+            output,
+            self.params.dict_size as usize,
+            self.memlimit,
+            &mut self.buf,
+        );
 
         let mut rangecoder = RangeDecoder::new(input)
             .map_err(|e| error::Error::LzmaError(format!("LZMA stream too short: {}", e)))?;
